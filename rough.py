@@ -2,15 +2,13 @@ import os
 import time
 import subprocess
 import requests
-import threading
 
 def download_file(url, filename):
     print(f"--- Phase 1: Downloading File ---")
-    start_download = time.perf_counter()
+    start_time = time.perf_counter()
     
     response = requests.get(url, stream=True)
     response.raise_for_status()
-    
     total_size = int(response.headers.get('content-length', 0))
     downloaded = 0
     
@@ -24,71 +22,61 @@ def download_file(url, filename):
                     print(f"\r{percent:.0f}% downloaded as of now", end="", flush=True)
     
     print("\nDownload Complete.")
-    return time.perf_counter() - start_download
+    return time.perf_counter() - start_time
 
-def process_to_hls(input_file):
-    print(f"--- Phase 2: Processing to Chunks (FFmpeg) ---")
+def process_video(input_file):
+    print(f"--- Phase 2: Video Processing ---")
     output_folder = "stream_output"
     os.makedirs(output_folder, exist_ok=True)
-    output_playlist = os.path.join(output_folder, "index.m3u8")
     
-    start_proc = time.perf_counter()
-    last_status_time = start_proc
+    start_time = time.perf_counter()
+    last_print_time = start_time
     
-    # FFmpeg command with -progress to track status
+    # FFmpeg: codec copy for speed, HLS for streaming chunks
     cmd = [
         'ffmpeg', '-i', input_file,
-        '-codec:', 'copy', 
-        '-start_number', '0', 
-        '-hls_time', '10', 
-        '-hls_list_size', '0', 
-        '-f', 'hls', output_playlist,
-        '-y' # Overwrite if exists
+        '-codec:', 'copy',
+        '-start_number', '0',
+        '-hls_time', '10',
+        '-hls_list_size', '0',
+        '-f', 'hls', f'{output_folder}/index.m3u8',
+        '-y'
     ]
     
-    # Start the process
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
-    print("Video processing started...")
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print("Processing started. Status updates every 10 minutes...")
 
-    while process.poll() is None:
+    while True:
+        retcode = process.poll()
         current_time = time.perf_counter()
         
-        # Check if 10 minutes (600 seconds) have passed
-        if current_time - last_status_time >= 600:
-            elapsed_mins = int((current_time - start_proc) / 60)
-            print(f"Still processing... {elapsed_mins} minutes elapsed.")
-            last_status_time = current_time
-        
-        time.sleep(10) # Check status every 10 seconds
+        # 10-minute heartbeat (600 seconds)
+        if current_time - last_print_time >= 600:
+            elapsed_mins = int((current_time - start_time) / 60)
+            print(f"Video processing status: Still running... ({elapsed_mins} minutes elapsed)")
+            last_print_time = current_time
+            
+        if retcode is not None:
+            break
+        time.sleep(5)
 
-    if process.returncode == 0:
-        print("Video processing complete.")
-        return time.perf_counter() - start_proc
-    else:
-        print("\nError during FFmpeg processing.")
-        return None
+    if retcode == 0:
+        return time.perf_counter() - start_time
+    return None
 
 if __name__ == "__main__":
-    file_url = os.getenv("DIRECT_DOWNLOAD_URL")
-    temp_filename = "source_video.mp4"
+    url = os.getenv("DIRECT_DOWNLOAD_URL")
+    file_name = "input_video.mp4"
     
-    if not file_url:
-        print("!! ERROR: DIRECT_DOWNLOAD_URL secret is missing !!")
+    if not url:
+        print("Error: DIRECT_DOWNLOAD_URL secret not found.")
     else:
-        # Phase 1: Download
-        time_download = download_file(file_url, temp_filename)
+        time_down = download_file(url, file_name)
+        time_proc = process_video(file_name)
         
-        # Phase 2: Process
-        time_process = process_to_hls(temp_filename)
-        
-        # Cleanup
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-
-        # Final Clean Print
-        print("\n" + "="*40)
-        print(f"Download time: {time_download:.2f}s")
-        if time_process:
-            print(f"Video processing time: {time_process:.2f}s")
-        print("="*40)
+        if os.path.exists(file_name):
+            os.remove(file_name)
+            
+        if time_proc:
+            # Final output: {download_time} {process_time}
+            print(f"\n{time_down:.2f} {time_proc:.2f}")
