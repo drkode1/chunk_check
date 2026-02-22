@@ -2,95 +2,62 @@ import os
 import time
 import subprocess
 import requests
-import re
-
-def get_video_duration(filename):
-    cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    try:
-        val = result.stdout.strip()
-        return float(val) if val else 0
-    except: return 0
 
 def download_file(url, filename):
-    print(f"--- Phase 1: Downloading ---")
+    print("--- Phase 1: Downloading ---")
     start_time = time.perf_counter()
-    response = requests.get(url, stream=True, timeout=60)
-    response.raise_for_status()
-    total_size = int(response.headers.get('content-length', 0))
-    downloaded = 0
-    last_reported = -1
-    
-    with open(filename, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=16*1024*1024):
-            if chunk:
+    with requests.get(url, stream=True, timeout=60) as r:
+        r.raise_for_status()
+        total = int(r.headers.get('content-length', 0))
+        dl = 0
+        last_p = -1
+        with open(filename, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=16*1024*1024):
                 f.write(chunk)
-                downloaded += len(chunk)
-                percent = int((downloaded / total_size) * 100) if total_size > 0 else 0
-                if percent > last_reported:
-                    print(f"{percent}% downloaded as of now")
-                    last_reported = percent
+                dl += len(chunk)
+                p = int((dl / total) * 100) if total > 0 else 0
+                if p > last_p:
+                    print(f"{p}% downloaded")
+                    last_p = p
     return time.perf_counter() - start_time
 
 def process_video(input_file):
-    print(f"--- Phase 2: Processing ---")
-    total_duration = get_video_duration(input_file)
+    print("--- Phase 2: Processing ---")
     output_folder = "stream_output"
     os.makedirs(output_folder, exist_ok=True)
-    progress_file = "ffmpeg_progress.txt" # We will track progress here
+    playlist = os.path.abspath(os.path.join(output_folder, "index.m3u8"))
     
     start_time = time.perf_counter()
     
-    # -progress sends status to a file instead of clogging the console
-    cmd = [
-        'ffmpeg', '-y', '-hide_banner', 
-        '-i', input_file,
-        '-c', 'copy', 
-        '-progress', progress_file,
-        '-f', 'hls', 
-        '-hls_time', '10',
-        '-hls_list_size', '0',
-        os.path.join(output_folder, 'index.m3u8')
-    ]
+    # Minimalist command string
+    # We use -v quiet to ensure NO logs are produced that could cause code 234
+    ffmpeg_cmd = f'ffmpeg -y -i {input_file} -c copy -hls_time 10 -hls_list_size 0 -f hls "{playlist}" -v quiet'
     
-    # Run FFmpeg in the background
-    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("FFmpeg engine started...")
+    print("Executing FFmpeg...")
+    # Using shell=True for maximum compatibility with the runner path
+    result = subprocess.run(ffmpeg_cmd, shell=True)
     
-    last_reported = -1
-    while process.poll() is None:
-        if os.path.exists(progress_file):
-            with open(progress_file, 'r') as f:
-                content = f.read()
-                # Find the 'out_time_ms' value in the file
-                match = re.search(r"out_time_ms=(\d+)", content)
-                if match:
-                    current_ms = int(match.group(1))
-                    current_pos = current_ms / 1000000
-                    if total_duration > 0:
-                        percent = int((current_pos / total_duration) * 100)
-                        if percent > last_reported and percent <= 100:
-                            print(f"{percent}% video processing as of now")
-                            last_reported = percent
-        time.sleep(1) # Check the file every second
-
-    if os.path.exists(progress_file): os.remove(progress_file)
-
-    if process.returncode == 0:
+    if result.returncode == 0:
         print("Processing Complete.")
         return time.perf_counter() - start_time
     else:
-        print(f"FFmpeg failed with return code {process.returncode}")
+        print(f"FFmpeg failed. Code: {result.returncode}")
         return None
 
 if __name__ == "__main__":
     url = os.getenv("DIRECT_DOWNLOAD_URL")
-    file_name = "input_video.mp4"
+    file_name = "test_vid.mp4"
     
     if url:
         t_down = download_file(url, file_name)
         t_proc = process_video(file_name)
-        if os.path.exists(file_name): os.remove(file_name)
         
+        if os.path.exists(file_name):
+            os.remove(file_name)
+            
         if t_proc:
             print(f"\n{t_down:.2f} {t_proc:.2f}")
+        else:
+            # If it fails, let's try to see if ffprobe can even read the file
+            print("Running diagnostic on downloaded file...")
+            subprocess.run(f"ffprobe -v error -show_format {file_name}", shell=True)
