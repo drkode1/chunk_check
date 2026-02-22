@@ -5,21 +5,24 @@ import requests
 import re
 
 def get_video_duration(filename):
+    """Get total video length to calculate percentage during processing."""
     cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filename]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    return float(result.stdout) if result.stdout.strip() else 0
+    try:
+        return float(result.stdout.strip())
+    except:
+        return 0
 
 def download_file(url, filename):
     print(f"--- Phase 1: Downloading ---")
     start_time = time.perf_counter()
-    # Using a larger stream buffer for server-grade networking
-    response = requests.get(url, stream=True, timeout=30)
+    response = requests.get(url, stream=True, timeout=60)
     response.raise_for_status()
     total_size = int(response.headers.get('content-length', 0))
     downloaded = 0
     
     with open(filename, 'wb') as f:
-        # 16MB chunks often perform better on high-speed server links
+        # 16MB buffer for faster cloud downloading
         for chunk in response.iter_content(chunk_size=16*1024*1024):
             if chunk:
                 f.write(chunk)
@@ -38,6 +41,7 @@ def process_video(input_file):
     os.makedirs(output_folder, exist_ok=True)
     
     start_time = time.perf_counter()
+    # -codec: copy ensures zero quality loss and maximum speed
     cmd = [
         'ffmpeg', '-i', input_file,
         '-codec:', 'copy',
@@ -76,11 +80,16 @@ if __name__ == "__main__":
     if not url:
         print("Error: DIRECT_DOWNLOAD_URL secret not found.")
     else:
+        # Phase 1
         time_down = download_file(url, file_name)
+        
+        # Phase 2
         time_proc = process_video(file_name)
         
+        # Final Clean-up of local file
         if os.path.exists(file_name):
             os.remove(file_name)
             
+        # Final Log Output (Requirements)
         if time_proc:
             print(f"\n{time_down:.2f} {time_proc:.2f}")
