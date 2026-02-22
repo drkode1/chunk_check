@@ -1,0 +1,22 @@
+name: Video Download and Chunking
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install requests
+
+      - name: Execute Script
+        env:
+          DIRECT_DOWNLOAD_URL: ${{ secrets.SEEDR_DIRECT_LINK }}
+        run: python process_direct.py
